@@ -31,6 +31,7 @@ const messageCache = new Map();
 client.on('messageCreate', async (message) => {
     if (!message.guild || message.author.bot) return;
 
+    // تخزين الرسائل للرومات المحمية فقط لاسترجاعها عند الحذف الخطأ
     if (PROTECTED_VOICE_CHANNELS.includes(message.channelId)) {
         if (!messageCache.has(message.channelId)) {
             messageCache.set(message.channelId, []);
@@ -39,37 +40,7 @@ client.on('messageCreate', async (message) => {
         channelMessages.push({ content: message.content, author: message.author.tag });
         if (channelMessages.length > 50) channelMessages.shift();
     }
-
-    const member = message.member;
-    if (!member || WHITELIST_IDS.includes(member.id) || member.id === message.guild.ownerId) return;
-
-    const channelId = message.channelId;
-    let isAllowed = true;
-
-    const group1 = [
-        '1535489711420735549', '1535426951333027972', '1535490093358252074', '1535375475289890879',
-        '1535406298781192292', '1535490327610400810', '1535490429724921986', '1535496283115225208',
-        '1535879098445078528', '1535880789114486834', '1535491432230555678', '1535491143897325578',
-        '1536659884420890724', '1536693109662949406', '1536689417136119888'
-    ];
-    if (group1.includes(channelId) && !member.roles.cache.has('1537101884710592626')) isAllowed = false;
-
-    const group2 = ['1535495503414825061', '1535495713473962024', '1535495916428206100'];
-    if (group2.includes(channelId) && !member.roles.cache.has('1537103042371919942')) isAllowed = false;
-
-    const group3 = ['1535495952994009180'];
-    if (group3.includes(channelId) && !member.roles.cache.has('1535845072690741360')) isAllowed = false;
-
-    const group4 = ['1535495994186137610'];
-    if (group4.includes(channelId) && !member.roles.cache.has('1535856845330194432') && !member.roles.cache.has('153774790357614652') && !member.roles.cache.has('1535774790357614652')) isAllowed = false;
-
-    const group5 = ['1536977594702888960', '1537003891286347828', '1537032400561905674'];
-    if (group5.includes(channelId) && !member.roles.cache.has('1535375782736560128')) isAllowed = false;
-
-    if (!isAllowed) {
-        await message.delete().catch(() => {});
-        await punishUser(message.guild, member, 'الكتابة في روم غير مسموح به بدون الرول المخصص');
-    }
+    // ملاحظة: تم إلغاء قيود الشات بالكامل بناءً على طلبك لتعمل أوامر البوتات (رول، سحب رول، قفل، فتح، وغيرها) بحرية تامة دون تدخل بوت الحماية.
 });
 
 async function punishUser(guild, member, reason) {
@@ -80,10 +51,10 @@ async function punishUser(guild, member, reason) {
 }
 
 client.on('ready', () => {
-    console.log(`Security Bot logged in as ${client.user.tag}! Ultimate Strict Protection & Voice Creator System is active.`);
+    console.log(`Security Bot logged in as ${client.user.tag}! Clean Profile & Channel Protection System is active.`);
 });
 
-// نظام إنشاء روم صوتي تلقائي عند دخول الروم المحدد (1536689417136119888) في الكاتيجوري أو الروم (1535491760627646524)
+// نظام إنشاء روم صوتي تلقائي عند دخول الروم (1536689417136119888) بحيث يوضع الروم الجديد في الشانل/الكاتيجوري (1535491760627646524)
 client.on('voiceStateUpdate', async (oldState, newState) => {
     if (newState.channelId === '1536689417136119888') {
         const guild = newState.guild;
@@ -92,7 +63,6 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 
         try {
             const targetParent = '1535491760627646524';
-            // التحقق إن كان الأيدي المذكور عبارة عن كاتيجوري أو روم عادي، والتعديل بحسب الرغبة
             const parentChannel = guild.channels.cache.get(targetParent);
             let categoryId = null;
             if (parentChannel) {
@@ -104,7 +74,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
             }
 
             const createdChannel = await guild.channels.create({
-                name: `Voice-${member.user.username}`,
+                name: `${member.user.username}`,
                 type: 2, // GuildVoice
                 parent: categoryId,
                 permissionOverwrites: [
@@ -120,7 +90,7 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     }
 });
 
-// 1. حماية الرولات (منع إعطاء رولات من البروفايل، منع إنشاء أو حذف رولات)
+// 1. حماية الرولات من البروفايل / البايو (Manag Roles) فقط
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
     const guild = newMember.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.MemberRoleUpdate });
@@ -139,7 +109,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                 await newMember.roles.remove(role.id).catch(() => {});
                 const executorMember = await guild.members.fetch(executor.id).catch(() => {});
                 if (executorMember) {
-                    await punishUser(guild, executorMember, 'محاولة إعطاء رول بطريقة غير نظامية');
+                    await punishUser(guild, executorMember, 'محاولة إعطاء رول بطريقة غير نظامية من البايو');
                 }
             }
         }
@@ -194,7 +164,7 @@ client.on('channelCreate', async (channel) => {
     }
 });
 
-// 3. حماية حذف الرومات: الرومات المحددة ترجع برسائلها، وباقي الرومات تحذف نهائياً، مع معاقبة الفاعل (ترو) في الحالتين
+// 3. حماية حذف الرومات: الرومات الـ 26 المحددة ترجع برسائلها، والباقي يحذف نهائياً مع معاقبة الفاعل
 client.on('channelDelete', async (channel) => {
     const guild = channel.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelDelete });
@@ -210,7 +180,7 @@ client.on('channelDelete', async (channel) => {
             await punishUser(guild, executorMember, 'محاولة حذف روم');
         }
 
-        // إذا كان الروم المحذوف ضمن الرومات الـ 26 المحمية -> يرجع بكامل بياناته ورسائله (مع استثناء الروم 1536689417136119888 لو تم اعتباره طبيعياً ولا يحذف إذا كان مخصصاً للإنشاء، لكنه هنا مدرج بالقائمة ليتم استرجاعه عند الحذف الخطأ أو الحفاظ عليه كما طلبتم)
+        // إذا كان الروم المحذوف ضمن الرومات الـ 26 المحمية -> يرجع بكامل بياناته ورسائله
         if (PROTECTED_VOICE_CHANNELS.includes(channel.id)) {
             try {
                 const restoredChannel = await guild.channels.create({
