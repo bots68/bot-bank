@@ -1,0 +1,13 @@
+{
+  "name": "bot-bank",
+  "version": "1.0.0",
+  "description": "Discord Bank and Game Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "canvas": "^2.11.2",
+    "discord.js": "^14.14.0"
+  }
+}
