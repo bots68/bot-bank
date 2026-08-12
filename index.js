@@ -13,22 +13,32 @@ const client = new Client({
 // قائمة الأيدي المستثناة (الإداريين الكبار أو المطور) لتجنب معاقبتهم بالخطأ
 const WHITELIST_IDS = ['YOUR_ID_HERE'];
 
-// دالة لتنفيذ العقوبة (مخالفة وترو / إعطاء شنب أو سحب صلاحيات حظر مؤقت ليكون بمثابة طرد/عقوبة قوية)
+// ذاكرة مؤقتة لتخزين رسائل الرومات لضمان محاولة إرجاعها عند الحذف الطارئ
+const messageCache = new Map();
+
+client.on('messageCreate', (message) => {
+    if (!message.guild || message.author.bot) return;
+    if (!messageCache.has(message.channelId)) {
+        messageCache.set(message.channelId, []);
+    }
+    const channelMessages = messageCache.get(message.channelId);
+    channelMessages.push({ content: message.content, author: message.author.tag });
+    if (channelMessages.length > 50) channelMessages.shift(); // الاحتفاظ بآخر 50 رسالة لكل روم
+});
+
+// دالة لتنفيذ العقوبة (تايم آوت / طرد مؤقت لمنع التخريب)
 async function punishUser(guild, member, reason) {
     if (!member || WHITELIST_IDS.includes(member.id) || member.id === guild.ownerId) return;
     try {
-        // إعطاء رول عقوبة (تأكد من إزالة الصلاحيات الخطيرة عنه أو عمل Timeout)
-        await member.timeout(10 * 60 * 1000, reason).catch(() => {});
-        // أو طرد مؤقت
-        // await member.kick(reason).catch(() => {});
+        await member.timeout(15 * 60 * 1000, reason).catch(() => {});
     } catch (e) {}
 }
 
 client.on('ready', () => {
-    console.log(`Security Bot logged in as ${client.user.tag}! Protection system is active.`);
+    console.log(`Security Bot logged in as ${client.user.tag}! Full Protection System is active.`);
 });
 
-// 1 & 3 & 10. حماية الرولات (منع إعطاء رولات حساسة من البروفايل، منع إنشاء أو حذف رولات نهائياً)
+// 1. حماية الرولات (منع إعطاء رولات من البروفايل، منع إنشاء أو حذف رولات)
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
     const guild = newMember.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.MemberRoleUpdate });
@@ -38,27 +48,21 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     const { executor, target } = auditLog;
     
     if (target.id === newMember.id && executor && !WHITELIST_IDS.includes(executor.id)) {
-        // فحص من أعطى رول بطريقة غير نظامية (من البروفايل)
         const oldRoles = oldMember.roles.cache;
         const newRoles = newMember.roles.cache;
         
         for (const role of newRoles.values()) {
             if (!oldRoles.has(role.id)) {
-                // شخص حاول إعطاء رول من البروفايل مباشرة
-                // نسحب الرول فوراً من العضو المستهدف
                 await newMember.roles.remove(role.id).catch(() => {});
-                
-                // نعاقب الشخص الي حاول يترول ويعطي الرول
                 const executorMember = await guild.members.fetch(executor.id).catch(() => {});
                 if (executorMember) {
-                    await punishUser(guild, executorMember, 'محاولة إعطاء رول بطريقة غير نظامية من البروفايل');
+                    await punishUser(guild, executorMember, 'محاولة إعطاء رول بطريقة غير نظامية');
                 }
             }
         }
     }
 });
 
-// منع إنشاء أو حذف الرولات نهائياً إلا عبر نظام محمي (أو منع تام)
 client.on('roleCreate', async (role) => {
     const guild = role.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.RoleCreate });
@@ -67,8 +71,7 @@ client.on('roleCreate', async (role) => {
     const { executor } = auditLog;
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
-        // حذف الرول المحدث فوراً
-        await role.delete('حظر إنشاء الرولات عشوائياً').catch(() => {});
+        await role.delete('حظر إنشاء الرولات').catch(() => {});
         const executorMember = await guild.members.fetch(executor.id).catch(() => {});
         if (executorMember) await punishUser(guild, executorMember, 'محاولة إنشاء رول');
     }
@@ -84,27 +87,27 @@ client.on('roleDelete', async (role) => {
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
         const executorMember = await guild.members.fetch(executor.id).catch(() => {});
         if (executorMember) await punishUser(guild, executorMember, 'محاولة حذف رول');
-        // ملاحظة: ديسكورد لا يدعم استرجاع الرول المحذوف تلقائياً بالكامل بنفس الأيدي، لكن يتم معاقبة الفاعل فوراً.
     }
 });
 
-// 4 & 5 & 6. حماية الرومات (منع إنشاء رومات، منع حذف رومات واسترجاعها، منع تعديل الصلاحيات)
+// 2. حماية إنشاء الرومات: أول ما أحد يسوي روم، ينحذف الروم فوراً ويترول الشخص
 client.on('channelCreate', async (channel) => {
     const guild = channel.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelCreate });
     const auditLog = fetchedLogs.entries.first();
     if (!auditLog) return;
-    const { executor }  = auditLog;
+    const { executor } = auditLog;
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
-        // حذف الروم المحدث فوراً
         await channel.delete('حظر إنشاء الرومات العشوائية').catch(() => {});
         const executorMember = await guild.members.fetch(executor.id).catch(() => {});
-        if (executorMember) await punishUser(guild, executorMember, 'محاولة إنشاء روم');
+        if (executorMember) {
+            await punishUser(guild, executorMember, 'محاولة إنشاء روم غير مسموح به');
+        }
     }
 });
 
-// استرجاع الروم المحذوف بكافة بياناته ورسائله (إن أمكن عبر النسخ الاحتياطي أو منع الحذف المباشر عبر الصلاحيات، ولحماية الحذف يتم رصد الحدث ومعاقبة الفاعل)
+// 3. حماية حذف الرومات: أول ما يحذف روم، يرجع الروم بنفس الثانية بكافة إعداداته ومعاقبة الفاعل
 client.on('channelDelete', async (channel) => {
     const guild = channel.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelDelete });
@@ -114,25 +117,41 @@ client.on('channelDelete', async (channel) => {
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
         const executorMember = await guild.members.fetch(executor.id).catch(() => {});
-        if (executorMember) await punishUser(guild, executorMember, 'محاولة حذف روم');
-        
-        // إعادة إنشاء روم نفس الاسم والصلاحيات والنوع لحماية الهيكل
+        if (executorMember) {
+            await punishUser(guild, executorMember, 'محاولة حذف روم');
+        }
+
+        // استرجاع الروم فوراً بنفس الاسم والنوع والصلاحيات والمكان
         try {
-            await guild.channels.create({
+            const restoredChannel = await guild.channels.create({
                 name: channel.name,
                 type: channel.type,
                 parent: channel.parentId,
+                position: channel.position,
+                topic: channel.topic,
+                rateLimitPerUser: channel.rateLimitPerUser,
+                nsfw: channel.nsfw,
                 permissionOverwrites: channel.permissionOverwrites.cache.map(p => ({
                     id: p.id,
                     allow: p.allow,
                     deny: p.deny
                 }))
             });
+
+            // إعادة إرسال الرسائل السابقة للروم إن وجدت في الذاكرة المؤقتة لضمان عدم ضياع المحتوى
+            const cachedMsgs = messageCache.get(channel.id);
+            if (cachedMsgs && cachedMsgs.length > 0) {
+                setTimeout(async () => {
+                    for (const msg of cachedMsgs) {
+                        await restoredChannel.send(`[استرجاع رسالة سابقة] **${msg.author}**: ${msg.content}`).catch(() => {});
+                    }
+                }, 1000);
+            }
         } catch (e) {}
     }
 });
 
-// 7. حماية تعديل صلاحيات الرومات (إذا حاول تعديل صلاحية روم وسيف، ترجع الصلاحيات القديمة ويتم معاقبته)
+// 4. حماية تعديل صلاحيات الرومات (إذا حاول تعديل صلاحية روم وسيف، ترجع الصلاحيات ويترول)
 client.on('channelUpdate', async (oldChannel, newChannel) => {
     const guild = newChannel.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelUpdate });
@@ -141,7 +160,6 @@ client.on('channelUpdate', async (oldChannel, newChannel) => {
     const { executor } = auditLog;
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
-        // إعادة الصلاحيات القديمة فوراً
         try {
             await newChannel.edit({
                 permissionOverwrites: oldChannel.permissionOverwrites.cache.map(p => ({
@@ -157,11 +175,11 @@ client.on('channelUpdate', async (oldChannel, newChannel) => {
     }
 });
 
-// 8. منع دخول أي بوت جديد وطرده فوراً
+// 5. منع دخول أي بوت جديد وطرده فوراً
 client.on('guildMemberAdd', async (member) => {
     if (member.user.bot) {
         try {
-            await member.kick('حظر دخول أي بوت جديد غير مصرح به تلقائياً');
+            await member.kick('حظر دخول أي بوت جديد غير مصرح به');
         } catch (e) {}
     }
 });
