@@ -13,20 +13,94 @@ const client = new Client({
 // قائمة الأيدي المستثناة (الإداريين الكبار أو المطور) لتجنب معاقبتهم بالخطأ
 const WHITELIST_IDS = ['YOUR_ID_HERE'];
 
-// ذاكرة مؤقتة لتخزين رسائل الرومات لضمان إرجاعها عند الحذف الطارئ
+// 1. أيدي الرومات الصوتية المحددة التي إذا انحذفت ترجع فوراً مع رسائلها، وباقي الرومات لو انحذفت تحذف نهائياً
+const PROTECTED_VOICE_CHANNELS = [
+    '1535489711420735549', '1535426951333027972', '1535490093358252074', '1535375475289890879',
+    '1535406298781192292', '1535490327610400810', '1535490429724921986', '1535496283115225208',
+    '1535879098445078528', '1535880789114486834', '1535491432230555678', '1535491143897325578',
+    '1536659884420890724', '1536693109662949406', '1536689417136119888', '1535495503414825061',
+    '1535495713473962024', '1535495916428206100', '1535495952994009180', '1535495994186137610',
+    '1535822130342658118', '1535821718751289354', '1535496238307213352', '1536977594702888960',
+    '1537003891286347828', '1537032400561905674'
+];
+
+// ذاكرة مؤقتة لتخزين رسائل الرومات الصوتية المحمية لاسترجاعها عند الحذف
 const messageCache = new Map();
 
-client.on('messageCreate', (message) => {
+client.on('messageCreate', async (message) => {
     if (!message.guild || message.author.bot) return;
-    if (!messageCache.has(message.channelId)) {
-        messageCache.set(message.channelId, []);
+
+    // تخزين الرسائل للرومات المحددة
+    if (PROTECTED_VOICE_CHANNELS.includes(message.channelId)) {
+        if (!messageCache.has(message.channelId)) {
+            messageCache.set(message.channelId, []);
+        }
+        const channelMessages = messageCache.get(message.channelId);
+        channelMessages.push({ content: message.content, author: message.author.tag });
+        if (channelMessages.length > 50) channelMessages.shift();
     }
-    const channelMessages = messageCache.get(message.channelId);
-    channelMessages.push({ content: message.content, author: message.author.tag });
-    if (channelMessages.length > 50) channelMessages.shift(); // الاحتفاظ بآخر 50 رسالة لكل روم
+
+    // التحقق من صلاحيات الكتابة حسب الرومات المحددة ورولات الاستريتر المسموحة
+    const member = message.member;
+    if (!member || WHITELIST_IDS.includes(member.id) || member.id === message.guild.ownerId) return;
+
+    const channelId = message.channelId;
+    let isAllowed = true;
+
+    // المجموعة الأولى: الرومات الـ 26 الأولى (الرول المسموح: 1537101884710592626)
+    const group1 = [
+        '1535489711420735549', '1535426951333027972', '1535490093358252074', '1535375475289890879',
+        '1535406298781192292', '1535490327610400810', '1535490429724921986', '1535496283115225208',
+        '1535879098445078528', '1535880789114486834', '1535491432230555678', '1535491143897325578',
+        '1536659884420890724', '1536693109662949406', '1536689417136119888'
+    ];
+    if (group1.includes(channelId)) {
+        if (!member.roles.cache.has('1537101884710592626')) {
+            isAllowed = false;
+        }
+    }
+
+    // المجموعة الثانية: الرومات الثلاثة (1535495503414825061, 1535495713473962024, 1535495916428206100) (الرول المسموح: 1537103042371919942)
+    const group2 = ['1535495503414825061', '1535495713473962024', '1535495916428206100'];
+    if (group2.includes(channelId)) {
+        if (!member.roles.cache.has('1537103042371919942')) {
+            isAllowed = false;
+        }
+    }
+
+    // المجموعة الثالثة: الروم (1535495952994009180) (الرول المسموح: 1535845072690741360)
+    const group3 = ['1535495952994009180'];
+    if (group3.includes(channelId)) {
+        if (!member.roles.cache.has('1535845072690741360')) {
+            isAllowed = false;
+        }
+    }
+
+    // المجموعة الرابعة: الروم (1535495994186137610) (الرولات المسموحة: 1535856845330194432 و 1535774790357614652)
+    const group4 = ['1535495994186137610'];
+    if (group4.includes(channelId)) {
+        if (!member.roles.cache.has('1535856845330194432') && !member.roles.cache.has('1535774790357614652')) {
+            isAllowed = false;
+        }
+    }
+
+    // المجموعة الخامسة: الرومات (1536977594702888960, 1537003891286347828, 1537032400561905674) (الرول المسموح: 1535375782736560128)
+    const group5 = ['1536977594702888960', '1537003891286347828', '1537032400561905674'];
+    if (group5.includes(channelId)) {
+        if (!member.roles.cache.has('1535375782736560128')) {
+            isAllowed = false;
+        }
+    }
+
+    // إذا لم يكن مصرحاً له بالكتابة في الروم، تحذف رسالته ويتم سحب رتبة الاستريتر منه ومعاقبته
+    if (!isAllowed) {
+        await message.delete().catch(() => {});
+        // سحب جميع رتب الاستريتر أو إعطاء عقوبة تايم آوت / سحب الرول المخالف
+        await punishUser(message.guild, member, 'الكتابة في روم غير مسموح به بدون الرول المخصص');
+    }
 });
 
-// دالة لتنفيذ العقوبة (تايم آوت لمنع التخريب)
+// دالة لتنفيذ العقوبة الفورية (تايم آوت وسحب رولات)
 async function punishUser(guild, member, reason) {
     if (!member || WHITELIST_IDS.includes(member.id) || member.id === guild.ownerId) return;
     try {
@@ -35,7 +109,7 @@ async function punishUser(guild, member, reason) {
 }
 
 client.on('ready', () => {
-    console.log(`Security Bot logged in as ${client.user.tag}! Full Loop-Free Protection System is active.`);
+    console.log(`Security Bot logged in as ${client.user.tag}! Voice Channels & Chat Strict Security is active.`);
 });
 
 // 1. حماية الرولات (منع إعطاء رولات من البروفايل، منع إنشاء أو حذف رولات)
@@ -101,7 +175,6 @@ client.on('channelCreate', async (channel) => {
     if (!auditLog) return;
     const { executor } = auditLog;
 
-    // تجاهل إذا كان البوت هو من قام بإنشاء الروم (أثناء عملية الاسترجاع)
     if (executor && executor.id === client.user.id) return;
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
@@ -113,7 +186,7 @@ client.on('channelCreate', async (channel) => {
     }
 });
 
-// 3. حماية حذف الرومات: يرجع الروم المحذوف فوراً بنفس الثانية وبنفس الإعدادات ورسائله، ومعاقبة الفاعل
+// 3. حماية حذف الرومات: الرومات المحددة فقط ترجع، وباقي الرومات تحذف نهائياً وتترول الفاعل
 client.on('channelDelete', async (channel) => {
     const guild = channel.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelDelete });
@@ -129,37 +202,39 @@ client.on('channelDelete', async (channel) => {
             await punishUser(guild, executorMember, 'محاولة حذف روم');
         }
 
-        // استرجاع الروم فوراً بنفس الاسم والنوع والصلاحيات والمكان
-        try {
-            const restoredChannel = await guild.channels.create({
-                name: channel.name,
-                type: channel.type,
-                parent: channel.parentId,
-                position: channel.position,
-                topic: channel.topic,
-                rateLimitPerUser: channel.rateLimitPerUser,
-                nsfw: channel.nsfw,
-                permissionOverwrites: channel.permissionOverwrites.cache.map(p => ({
-                    id: p.id,
-                    allow: p.allow,
-                    deny: p.deny
-                }))
-            });
+        // تحقق إذا كان الروم المحذوف ضمن الرومات الصوتية المحمية فقط لإرجاعه
+        if (PROTECTED_VOICE_CHANNELS.includes(channel.id)) {
+            try {
+                const restoredChannel = await guild.channels.create({
+                    name: channel.name,
+                    type: channel.type,
+                    parent: channel.parentId,
+                    position: channel.position,
+                    topic: channel.topic,
+                    rateLimitPerUser: channel.rateLimitPerUser,
+                    nsfw: channel.nsfw,
+                    permissionOverwrites: channel.permissionOverwrites.cache.map(p => ({
+                        id: p.id,
+                        allow: p.allow,
+                        deny: p.deny
+                    }))
+                });
 
-            // إعادة إرسال الرسائل السابقة للروم إن وجدت في الذاكرة المؤقتة
-            const cachedMsgs = messageCache.get(channel.id);
-            if (cachedMsgs && cachedMsgs.length > 0) {
-                setTimeout(async () => {
-                    for (const msg of cachedMsgs) {
-                        await restoredChannel.send(`[استرجاع رسالة سابقة] **${msg.author}**: ${msg.content}`).catch(() => {});
-                    }
-                }, 1000);
-            }
-        } catch (e) {}
+                // إعادة إرسال الرسائل السابقة للروم إن وجدت في الذاكرة المؤقتة
+                const cachedMsgs = messageCache.get(channel.id);
+                if (cachedMsgs && cachedMsgs.length > 0) {
+                    setTimeout(async () => {
+                        for (const msg of cachedMsgs) {
+                            await restoredChannel.send(`[استرجاع رسالة سابقة] **${msg.author}**: ${msg.content}`).catch(() => {});
+                        }
+                    }, 1000);
+                }
+            } catch (e) {}
+        }
     }
 });
 
-// 4. حماية تعديل صلاحيات الرومات (إذا حاول تعديل صلاحية روم، ترجع الصلاحيات ويترول)
+// 4. حماية تعديل صلاحيات الرومات: إعادة الصلاحيات القديمة ومعاقبة الفاعل فوراً
 client.on('channelUpdate', async (oldChannel, newChannel) => {
     const guild = newChannel.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelUpdate });
