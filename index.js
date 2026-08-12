@@ -13,7 +13,7 @@ const client = new Client({
 // قائمة الأيدي المستثناة (الإداريين الكبار أو المطور) لتجنب معاقبتهم بالخطأ
 const WHITELIST_IDS = ['YOUR_ID_HERE'];
 
-// ذاكرة مؤقتة لتخزين رسائل الرومات لضمان محاولة إرجاعها عند الحذف الطارئ
+// ذاكرة مؤقتة لتخزين رسائل الرومات لضمان إرجاعها عند الحذف الطارئ
 const messageCache = new Map();
 
 client.on('messageCreate', (message) => {
@@ -26,7 +26,7 @@ client.on('messageCreate', (message) => {
     if (channelMessages.length > 50) channelMessages.shift(); // الاحتفاظ بآخر 50 رسالة لكل روم
 });
 
-// دالة لتنفيذ العقوبة (تايم آوت / طرد مؤقت لمنع التخريب)
+// دالة لتنفيذ العقوبة (تايم آوت لمنع التخريب)
 async function punishUser(guild, member, reason) {
     if (!member || WHITELIST_IDS.includes(member.id) || member.id === guild.ownerId) return;
     try {
@@ -35,7 +35,7 @@ async function punishUser(guild, member, reason) {
 }
 
 client.on('ready', () => {
-    console.log(`Security Bot logged in as ${client.user.tag}! Full Protection System is active.`);
+    console.log(`Security Bot logged in as ${client.user.tag}! Full Loop-Free Protection System is active.`);
 });
 
 // 1. حماية الرولات (منع إعطاء رولات من البروفايل، منع إنشاء أو حذف رولات)
@@ -46,6 +46,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     
     if (!auditLog) return;
     const { executor, target } = auditLog;
+    if (executor && executor.id === client.user.id) return;
     
     if (target.id === newMember.id && executor && !WHITELIST_IDS.includes(executor.id)) {
         const oldRoles = oldMember.roles.cache;
@@ -69,6 +70,7 @@ client.on('roleCreate', async (role) => {
     const auditLog = fetchedLogs.entries.first();
     if (!auditLog) return;
     const { executor } = auditLog;
+    if (executor && executor.id === client.user.id) return;
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
         await role.delete('حظر إنشاء الرولات').catch(() => {});
@@ -83,6 +85,7 @@ client.on('roleDelete', async (role) => {
     const auditLog = fetchedLogs.entries.first();
     if (!auditLog) return;
     const { executor } = auditLog;
+    if (executor && executor.id === client.user.id) return;
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
         const executorMember = await guild.members.fetch(executor.id).catch(() => {});
@@ -90,13 +93,16 @@ client.on('roleDelete', async (role) => {
     }
 });
 
-// 2. حماية إنشاء الرومات: أول ما أحد يسوي روم، ينحذف الروم فوراً ويترول الشخص
+// 2. حماية إنشاء الرومات: يحذف الروم المضاف فوراً ولا يعيد إنشائه، مع معاقبة الفاعل
 client.on('channelCreate', async (channel) => {
     const guild = channel.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelCreate });
     const auditLog = fetchedLogs.entries.first();
     if (!auditLog) return;
     const { executor } = auditLog;
+
+    // تجاهل إذا كان البوت هو من قام بإنشاء الروم (أثناء عملية الاسترجاع)
+    if (executor && executor.id === client.user.id) return;
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
         await channel.delete('حظر إنشاء الرومات العشوائية').catch(() => {});
@@ -107,13 +113,15 @@ client.on('channelCreate', async (channel) => {
     }
 });
 
-// 3. حماية حذف الرومات: أول ما يحذف روم، يرجع الروم بنفس الثانية بكافة إعداداته ومعاقبة الفاعل
+// 3. حماية حذف الرومات: يرجع الروم المحذوف فوراً بنفس الثانية وبنفس الإعدادات ورسائله، ومعاقبة الفاعل
 client.on('channelDelete', async (channel) => {
     const guild = channel.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelDelete });
     const auditLog = fetchedLogs.entries.first();
     if (!auditLog) return;
     const { executor } = auditLog;
+
+    if (executor && executor.id === client.user.id) return;
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
         const executorMember = await guild.members.fetch(executor.id).catch(() => {});
@@ -138,7 +146,7 @@ client.on('channelDelete', async (channel) => {
                 }))
             });
 
-            // إعادة إرسال الرسائل السابقة للروم إن وجدت في الذاكرة المؤقتة لضمان عدم ضياع المحتوى
+            // إعادة إرسال الرسائل السابقة للروم إن وجدت في الذاكرة المؤقتة
             const cachedMsgs = messageCache.get(channel.id);
             if (cachedMsgs && cachedMsgs.length > 0) {
                 setTimeout(async () => {
@@ -151,13 +159,14 @@ client.on('channelDelete', async (channel) => {
     }
 });
 
-// 4. حماية تعديل صلاحيات الرومات (إذا حاول تعديل صلاحية روم وسيف، ترجع الصلاحيات ويترول)
+// 4. حماية تعديل صلاحيات الرومات (إذا حاول تعديل صلاحية روم، ترجع الصلاحيات ويترول)
 client.on('channelUpdate', async (oldChannel, newChannel) => {
     const guild = newChannel.guild;
     const fetchedLogs = await guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelUpdate });
     const auditLog = fetchedLogs.entries.first();
     if (!auditLog) return;
     const { executor } = auditLog;
+    if (executor && executor.id === client.user.id) return;
 
     if (executor && !WHITELIST_IDS.includes(executor.id)) {
         try {
