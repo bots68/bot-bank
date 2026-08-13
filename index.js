@@ -13,6 +13,8 @@ const client = new Client({
 
 // ==================== [ الثوابت والمعرفات الأساسية ] ====================
 const PUNISHMENT_ROLE_ID = '1537101884710592626'; // رول العقوبة / التنتيل العام
+const TIMEOUT_ALLOWED_ROLE = '1535522564061929512'; // الرول المسموح له بعمل تايم أوت
+const BAN_ALLOWED_ROLE = '1535522481719349249'; // الرول المسموح له بعمل بان
 
 // قائمة الرومات الصوتية والرومات الأخرى المحمية التي يجب أن تعود إذا انحذفت
 const PROTECTED_CHANNELS = new Set([
@@ -55,7 +57,7 @@ client.once('ready', () => {
     console.log(`[SECURE BOT ACTIVE] Logged in as ${client.user.tag}`);
 });
 
-// ==================== [ 1. الحماية من إنشاء الويب هوك (Webhooks) ] ====================
+// ==================== [ 1. الحماية من إنشاء الويب هوك ] ====================
 client.on('webhookUpdate', async (channel) => {
     try {
         const fetchedLogs = await channel.guild.fetchAuditLogs({
@@ -81,7 +83,7 @@ client.on('webhookUpdate', async (channel) => {
     }
 });
 
-// ==================== [ 2. الحماية من إنشاء رولات جديدة ] ====================
+// ==================== [ 2. الحماية من إنشاء رولات جديدة وتنتيل الفاعل ] ====================
 client.on('roleCreate', async (role) => {
     try {
         const fetchedLogs = await role.guild.fetchAuditLogs({
@@ -104,7 +106,7 @@ client.on('roleCreate', async (role) => {
     }
 });
 
-// ==================== [ 3. الحماية من حذف رولات قديمة (مر عليها أكثر من يوم واحد) ] ====================
+// ==================== [ 3. الحماية من حذف رولات قديمة ] ====================
 client.on('roleDelete', async (role) => {
     try {
         const roleCreationTime = role.createdTimestamp;
@@ -143,13 +145,12 @@ client.on('roleDelete', async (role) => {
     }
 });
 
-// ==================== [ 4. الحماية الصارمة من دخول أي بوت (مع معاقبة من أضافه) ] ====================
+// ==================== [ 4. الحماية الصارمة من دخول أو طرد البوتات (مع تنتيل الفاعل) ] ====================
 client.on('guildMemberAdd', async (member) => {
     if (member.user.bot) {
         try {
             await member.ban({ reason: 'Anti-Bot: Unauthorized bot detected entering the server.' });
             
-            // جلب سجل التدقيق لمعرفة من قام بدعوة البوت وتنتيله
             const fetchedLogs = await member.guild.fetchAuditLogs({
                 limit: 1,
                 type: AuditLogEvent.BotAdd,
@@ -166,7 +167,25 @@ client.on('guildMemberAdd', async (member) => {
     }
 });
 
-// ==================== [ 5. مراقبة التلاعب بالرولات عبر البايو/البروفايل ] ====================
+// مراقبة طرد البوتات أو أي إجراء متعلق بالبوتات لتنتيل الفاعل فوراً
+client.on('guildMemberRemove', async (member) => {
+    try {
+        const fetchedLogs = await member.guild.fetchAuditLogs({
+            limit: 1,
+            type: AuditLogEvent.MemberKick,
+        });
+        const auditLog = fetchedLogs.entries.first();
+        if (auditLog && auditLog.target.id === member.id && !auditLog.executor.bot) {
+            const executorMember = await member.guild.members.fetch(auditLog.executor.id);
+            await executorMember.roles.add(PUNISHMENT_ROLE_ID);
+            console.log(`[KICK BLOCKED/PUNISHED] Punished ${executorMember.user.tag} for kicking a member/bot.`);
+        }
+    } catch (e) {
+        console.error(e);
+    }
+});
+
+// ==================== [ 5. مراقبة التلاعب بالرولات والتنكيل الفوري ] ====================
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
     const fetchedLogs = await newMember.guild.fetchAuditLogs({
         limit: 1,
@@ -174,10 +193,11 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     });
     const auditLog = fetchedLogs.entries.first();
     
-    if (auditLog) {
+    if (auditLog && !auditLog.executor.bot) {
         const { executor, target } = auditLog;
         
-        if (target.id === newMember.id && !executor.bot) {
+        // إذا قام شخص بإعطاء رول لغيره أو لنفسه من البايو أو بطريقة غير مصرح بها
+        if (target.id === newMember.id || executor.id === target.id) {
             const addedRoles = newMember.roles.cache.filter(role => !oldMember.roles.cache.has(role.id));
             const removedRoles = oldMember.roles.cache.filter(role => !newMember.roles.cache.has(role.id));
 
@@ -185,8 +205,10 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                 for (const [roleId] of addedRoles) {
                     try {
                         await newMember.roles.remove(roleId);
-                        await newMember.roles.add(PUNISHMENT_ROLE_ID);
-                        console.log(`[BIO ROLE EXPLOIT BLOCKED] Removed unauthorized role and punished ${newMember.user.tag}`);
+                        // إزالة الرول المضاف من الشخص المستهدف فقط، وتنتيل الفاعل
+                        const executorMember = await newMember.guild.members.fetch(executor.id);
+                        await executorMember.roles.add(PUNISHMENT_ROLE_ID);
+                        console.log(`[ROLE EXPLOIT BLOCKED] Removed added role from target and punished executor ${executorMember.user.tag}`);
                     } catch (e) {
                         console.error(e);
                     }
@@ -196,9 +218,11 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
             if (removedRoles.size > 0) {
                 for (const [roleId] of removedRoles) {
                     try {
+                        // إرجاع الرول الذي تم سحبه فقط دون زيادته، وتنتيل الفاعل
                         await newMember.roles.add(roleId);
-                        await newMember.roles.add(PUNISHMENT_ROLE_ID);
-                        console.log(`[BIO ROLE REMOVE EXPLOIT] Restored removed role and punished ${newMember.user.tag}`);
+                        const executorMember = await newMember.guild.members.fetch(executor.id);
+                        await executorMember.roles.add(PUNISHMENT_ROLE_ID);
+                        console.log(`[ROLE REMOVE EXPLOIT] Restored removed role and punished executor ${executorMember.user.tag}`);
                     } catch (e) {
                         console.error(e);
                     }
@@ -208,7 +232,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     }
 });
 
-// ==================== [ 6. مراقبة التايم أوت (منع ثغرات البايو) ] ====================
+// ==================== [ 6. مراقبة التايم أوت (منع وضبط المخالفات) ] ====================
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
     if (!oldMember.communicationDisabledUntil && newMember.communicationDisabledUntil) {
         const fetchedLogs = await newMember.guild.fetchAuditLogs({
@@ -217,30 +241,59 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
         });
         const auditLog = fetchedLogs.entries.first();
         
-        if (auditLog && auditLog.executor.id === newMember.id) {
-            try {
-                await newMember.timeout(null, 'Anti-Exploit: Removing unauthorized self/bio timeout.');
-                await newMember.roles.add(PUNISHMENT_ROLE_ID);
-                console.log(`[TIMEOUT EXPLOIT] Punished ${newMember.user.tag} for bio/unauthorized timeout.`);
-            } catch (e) {
-                console.error(e);
+        if (auditLog && !auditLog.executor.bot) {
+            const executorId = auditLog.executor.id;
+            const executorMember = await newMember.guild.members.fetch(executorId);
+
+            // إذا قام بالتايم أوت شخص لا يملك الرول المسموح (1535522564061929512) أو عمل تايم أوت لنفسه من البايو
+            if (!executorMember.roles.cache.has(TIMEOUT_ALLOWED_ROLE) || executorId === newMember.id) {
+                try {
+                    await newMember.timeout(null, 'Anti-Exploit: Removing unauthorized timeout.');
+                    await executorMember.roles.add(PUNISHMENT_ROLE_ID);
+                    console.log(`[TIMEOUT BLOCKED] Removed unauthorized timeout and punished ${executorMember.user.tag}`);
+                } catch (e) {
+                    console.error(e);
+                }
             }
         }
     }
 });
 
-// ==================== [ 7. مراقبة إنشاء الرومات وحذفها (Anti-Nuke & Temp Channels) ] ====================
+// ==================== [ 7. مراقبة الباندات (Anti-Unauthorized Ban) ] ====================
+client.on('guildBanAdd', async (ban) => {
+    try {
+        const fetchedLogs = await ban.guild.fetchAuditLogs({
+            limit: 1,
+            type: AuditLogEvent.MemberBanAdd,
+        });
+        const auditLog = fetchedLogs.entries.first();
+        if (!auditLog || auditLog.executor.bot) return;
+
+        const executorMember = await ban.guild.members.fetch(auditLog.executor.id);
+        
+        // إذا قام بالباند شخص لا يملك الرول المسموح (1535522481719349249)
+        if (!executorMember.roles.cache.has(BAN_ALLOWED_ROLE)) {
+            // فك الباند عن الشخص الذي تم تبنيده
+            await ban.guild.members.unban(ban.user.id, 'Anti-Exploit: Unbanning user from unauthorized ban.');
+            // وتنتيل الشخص الذي قام بالباند
+            await executorMember.roles.add(PUNISHMENT_ROLE_ID);
+            console.log(`[BAN BLOCKED] Unbanned target and punished unauthorized banner ${executorMember.user.tag}`);
+        }
+    } catch (e) {
+        console.error('[BAN CHECK ERROR]', e);
+    }
+});
+
+// ==================== [ 8. مراقبة إنشاء الرومات وحذفها ] ====================
 client.on('channelCreate', async (channel) => {
     const fetchedLogs = await channel.guild.fetchAuditLogs({
         limit: 1,
         type: AuditLogEvent.ChannelCreate,
     });
     const auditLog = fetchedLogs.entries.first();
-    if (!auditLog) return;
+    if (!auditLog || auditLog.executor.bot) return;
 
     const { executor } = auditLog;
-    if (executor.bot) return;
-
     const TEMP_CREATOR_TRIGGER = '1535491760627646524';
     
     try {
@@ -256,6 +309,22 @@ client.on('channelCreate', async (channel) => {
 });
 
 client.on('channelDelete', async (channel) => {
+    // تنتيل من قام بحذف أي روم محمي
+    try {
+        const fetchedLogs = await channel.guild.fetchAuditLogs({
+            limit: 1,
+            type: AuditLogEvent.ChannelDelete,
+        });
+        const auditLog = fetchedLogs.entries.first();
+        if (auditLog && !auditLog.executor.bot) {
+            const member = await channel.guild.members.fetch(auditLog.executor.id);
+            await member.roles.add(PUNISHMENT_ROLE_ID);
+            console.log(`[CHANNEL DELETE PUNISH] Punished ${member.user.tag} for deleting channel.`);
+        }
+    } catch (e) {
+        console.error(e);
+    }
+
     if (PROTECTED_CHANNELS.has(channel.id)) {
         try {
             await channel.guild.channels.create({
@@ -275,36 +344,30 @@ client.on('channelDelete', async (channel) => {
     }
 });
 
-// ==================== [ 8. الأوامر الكتابية، أمر "سحب رول"، والصلاحيات في الرومات ] ====================
+// ==================== [ 9. الأوامر الكتابية، أمر "سحب رول"، والصلاحيات والتدقيق في الرومات ] ====================
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
 
     const member = message.member;
     if (!member) return;
 
-    // دعم أمر "سحب رول [اسم أو أول حرفين]" بالمنشن أو الرد
+    // دعم أمر "سحب رول" بالمنشن أو الرد، مع دعم البحث الدقيق وتجاوز المشاكل
     if (message.content.startsWith('سحب رول')) {
         let targetMember = message.mentions.members.first();
         
-        // إذا كان رداً على رسالة شخص
         if (!targetMember && message.reference) {
             try {
                 const repliedMessage = await message.channel.messages.fetch(message.reference.messageId);
                 targetMember = await message.guild.members.fetch(repliedMessage.author.id);
-            } catch (err) {
-                // تجاهل خطأ جلب الرسالة المردود عليها
-            }
+            } catch (err) {}
         }
 
         if (targetMember) {
-            // استخراج اسم الرول أو الحروف المكتوبة بعد الأمر والمنشن
             const args = message.content.split(' ').slice(1);
-            // تصفية الكلمات التي تحتوي على منشن لإبقاء اسم الرول/الحروف
             const roleQueryArgs = args.filter(arg => !arg.startsWith('<@'));
             const roleQuery = roleQueryArgs.join(' ').toLowerCase();
 
             if (roleQuery) {
-                // البحث عن الرول بالبداية أو الاحتواء
                 const foundRole = message.guild.roles.cache.find(r => 
                     r.name.toLowerCase().startsWith(roleQuery) || r.name.toLowerCase().includes(roleQuery)
                 );
@@ -326,7 +389,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // مراقبة الرومات المخصصة وحظر الكتابة لمن لا يملك الصلاحية (بدون إعطاء رولات)
+    // مراقبة الرومات المخصصة وحظر الكتابة لمن لا يملك الصلاحية (حذف الرسالة وتنتيله فوراً دون إعطائه رول)
     for (const key in CHANNEL_PERMISSIONS_CONFIG) {
         const config = CHANNEL_PERMISSIONS_CONFIG[key];
         
