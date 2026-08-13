@@ -94,10 +94,8 @@ client.on('roleCreate', async (role) => {
         const { executor } = auditLog;
         if (executor.bot) return;
 
-        // حذف الرول الجديد في نفس الثانية
         await role.delete('Anti-Nuke: Unauthorized role creation blocked.');
 
-        // تنتيل الشخص المخالف
         const member = await role.guild.members.fetch(executor.id);
         await member.roles.add(PUNISHMENT_ROLE_ID);
         console.log(`[ROLE CREATE BLOCKED] Deleted new role created by ${executor.tag} and punished.`);
@@ -109,14 +107,12 @@ client.on('roleCreate', async (role) => {
 // ==================== [ 3. الحماية من حذف رولات قديمة (مر عليها أكثر من يوم واحد) ] ====================
 client.on('roleDelete', async (role) => {
     try {
-        // حساب عمر الرول (تاريخ الإنشاء مستخرج من معرف الرول في ديسكورد)
         const roleCreationTime = role.createdTimestamp;
         const currentTime = Date.now();
-        const oneDayInMs = 24 * 60 * 60 * 1000; // 24 ساعة بالميلي ثانية
+        const oneDayInMs = 24 * 60 * 60 * 1000;
 
-        // التحقق مما إذا كان عمر الرول أقل من يوم واحد (يعتبر رولاً جديداً أو حديثاً فلا يتم إرجاعه)
         if ((currentTime - roleCreationTime) < oneDayInMs) {
-            return; // تجاهل الإرجاع إذا كان الرول حديث الإنشاء لعدم حدوث تداخل
+            return;
         }
 
         const fetchedLogs = await role.guild.fetchAuditLogs({
@@ -129,7 +125,6 @@ client.on('roleDelete', async (role) => {
         const { executor } = auditLog;
         if (executor.bot) return;
 
-        // إعادة إنشاء الرول المحذوف القديم بنفس المواصفات والصلاحيات والمكانة
         await role.guild.roles.create({
             name: role.name,
             color: role.color,
@@ -140,7 +135,6 @@ client.on('roleDelete', async (role) => {
             reason: 'Anti-Nuke: Restoring deleted old/established role automatically.'
         });
 
-        // تنتيل المخالف الذي حذف الرول القديم
         const member = await role.guild.members.fetch(executor.id);
         await member.roles.add(PUNISHMENT_ROLE_ID);
         console.log(`[ROLE DELETE BLOCKED] Restored deleted old role: ${role.name} and punished ${executor.tag}`);
@@ -161,32 +155,53 @@ client.on('guildMemberAdd', async (member) => {
     }
 });
 
-// ==================== [ 5. مراقبة الرولات (منع ثغرات البايو/البروفايل والتلاعب) ] ====================
+// ==================== [ 5. مراقبة التلاعب بالرولات عبر البايو/البروفايل (مع استثناء الأوامر اليدوية) ] ====================
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
     const fetchedLogs = await newMember.guild.fetchAuditLogs({
         limit: 1,
         type: AuditLogEvent.MemberRoleUpdate,
     });
     const auditLog = fetchedLogs.entries.first();
-    const addedRoles = newMember.roles.cache.filter(role => !oldMember.roles.cache.has(role.id));
     
-    if (addedRoles.size > 0 && auditLog) {
-        const { target } = auditLog;
-        if (target.id === newMember.id) {
-            for (const [roleId] of addedRoles) {
-                try {
-                    await newMember.roles.remove(roleId);
-                    await newMember.roles.add(PUNISHMENT_ROLE_ID);
-                    console.log(`[ROLE EXPLOIT BLOCKED] Punished ${newMember.user.tag} for unauthorized role manipulation.`);
-                } catch (e) {
-                    console.error(e);
+    // التحقق عما إذا كان التعديل تم عبر الواجهة الخارجية (Profile / Bio) وليس عبر بوت أو أمر شات معتمد
+    if (auditLog) {
+        const { executor, target } = auditLog;
+        
+        // إذا قام الشخص بتعديل رولات نفسه أو استخدام ثغرة البروفايل لتغيير الرولات
+        if (target.id === newMember.id && !executor.bot) {
+            const addedRoles = newMember.roles.cache.filter(role => !oldMember.roles.cache.has(role.id));
+            const removedRoles = oldMember.roles.cache.filter(role => !newMember.roles.cache.has(role.id));
+
+            // إذا أضاف رول عبر البايو/البروفايل
+            if (addedRoles.size > 0) {
+                for (const [roleId] of addedRoles) {
+                    try {
+                        await newMember.roles.remove(roleId);
+                        await newMember.roles.add(PUNISHMENT_ROLE_ID);
+                        console.log(`[BIO ROLE EXPLOIT BLOCKED] Removed unauthorized role and punished ${newMember.user.tag}`);
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }
+            }
+
+            // إذا سحب رول عبر البايو/البروفايل (نسترجعه وننتله)
+            if (removedRoles.size > 0) {
+                for (const [roleId] of removedRoles) {
+                    try {
+                        await newMember.roles.add(roleId);
+                        await newMember.roles.add(PUNISHMENT_ROLE_ID);
+                        console.log(`[BIO ROLE REMOVE EXPLOIT] Restored removed role and punished ${newMember.user.tag}`);
+                    } catch (e) {
+                        console.error(e);
+                    }
                 }
             }
         }
     }
 });
 
-// ==================== [ 6. مراقبة التايم أوت (مكافحة ثغرات البايو) ] ====================
+// ==================== [ 6. مراقبة التايم أوت (منع ثغرات البايو والسماح للأوامر اليدوية) ] ====================
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
     if (!oldMember.communicationDisabledUntil && newMember.communicationDisabledUntil) {
         const fetchedLogs = await newMember.guild.fetchAuditLogs({
@@ -195,6 +210,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
         });
         const auditLog = fetchedLogs.entries.first();
         
+        // إذا قام الشخص بعمل تايم أوت لنفسه أو من البايو (وليس عبر أمر بوت معتمد في الشات)
         if (auditLog && auditLog.executor.id === newMember.id) {
             try {
                 await newMember.timeout(null, 'Anti-Exploit: Removing unauthorized self/bio timeout.');
@@ -285,4 +301,5 @@ client.on('messageCreate', async (message) => {
         }
     }
 });
+
 client.login(process.env.DISCORD_TOKEN);
