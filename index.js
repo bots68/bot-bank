@@ -12,15 +12,23 @@ const client = new Client({
 });
 
 // ==================== [ الثوابت والمعرفات الأساسية ] ====================
-const PUNISHMENT_ROLE_ID = '1537101884710592626'; // رول التنتيل العام
+const PUNISHMENT_ROLE_ID = '1537101884710592626'; // رول التنتيل العام (الرول الوحيد المتبقي عند العقوبة)
 const TIMEOUT_ALLOWED_ROLE = '1535522564061929512'; // الرول المسموح له بالتايم أوت
 const BAN_ALLOWED_ROLE = '1535522481719349249'; // رول الباند
-const EXEMPT_ROLE_1 = '1535724553563668561'; // الرول الوحيد المستثنى نهائياً من التنتيل وسحب الرولات
-const STRICT_CHAT_ROLE = '1535375782736560128'; // الرول المسموح له بالكتابة في الرومات المحددة
+
+// الرومات المحمية الخاصة بالكتابة والآداب
+const CHANNEL_FOR_ROLE_153710 = '1535426951333027972';
+const CHANNELS_FOR_ROLE_153537 = [
+    '1535490093358252074',
+    '1535489711420735549'
+];
+
+const REQUIRED_ROLE_FOR_FIRST_CHANNEL = '1537101884710592626';
+const REQUIRED_ROLE_FOR_OTHER_CHANNELS = '1535375782736560128';
 
 const banTracker = new Map();
 
-// الـ 26 روم المحمية الأساسية
+// الـ 26 روم المحمية الأساسية ضد الحذف
 const PROTECTED_CHANNELS = new Set([
     '1535489711420735549', '1535426951333027972', '1535490093358252074',
     '1535375475289890879', '1535406298781192292', '1535490327610400810',
@@ -33,22 +41,14 @@ const PROTECTED_CHANNELS = new Set([
     '1537003891286347828', '1537032400561905674'
 ]);
 
-// الرومات المحددة الممنوعة على غير الرول المخصص
-const STRICT_CHAT_CHANNELS = [
-    '1535426951333027972',
-    '1535490093358252074',
-    '1535489711420735549'
-];
-
-// دالة التنتيل الشاملة (تسحب كل رولات العضو وتبقي فقط EXEMPT_ROLE_1 وتعطيه رول التنتيل)
+// دالة التنتيل الشاملة: تسحب جميع الرولات وتترك فقط رول التنتيل
 async function punishMember(member, reason) {
     if (!member) return;
     try {
-        const rolesToKeep = member.roles.cache.filter(role => role.id === EXEMPT_ROLE_1);
-        if (!rolesToKeep.has(PUNISHMENT_ROLE_ID)) {
-            rolesToKeep.set(PUNISHMENT_ROLE_ID, member.guild.roles.cache.get(PUNISHMENT_ROLE_ID));
-        }
-        await member.roles.set(rolesToKeep, reason);
+        const punishmentRole = member.guild.roles.cache.get(PUNISHMENT_ROLE_ID);
+        if (!punishmentRole) return;
+        // سحب جميع الرولات وإعطاء رول التنتيل فقط
+        await member.roles.set([punishmentRole], reason);
     } catch (e) { console.error('Punish Error:', e); }
 }
 
@@ -263,23 +263,36 @@ client.on('guildMemberAdd', async (member) => {
     }
 });
 
-// ==================== [ 4. الأوامر الكتابية وحماية الرومات الثلاثة وأمر "سحب رول" ] ====================
+// ==================== [ 4. الأوامر الكتابية وحماية الرومات المخصصة وأمر "سحب رول" ] ====================
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
 
     const member = message.member;
     if (!member) return;
 
-    if (STRICT_CHAT_CHANNELS.includes(message.channel.id)) {
-        if (!member.roles.cache.has(STRICT_CHAT_ROLE)) {
+    // حماية الروم الأول: 1535426951333027972 (مخصص فقط لرول 1537101884710592626)
+    if (message.channel.id === CHANNEL_FOR_ROLE_153710) {
+        if (!member.roles.cache.has(REQUIRED_ROLE_FOR_FIRST_CHANNEL)) {
             try {
                 await message.delete();
-                await punishMember(member, 'Anti-Nuke: Unauthorized speaking in protected chat.');
+                await punishMember(member, 'Anti-Nuke: Unauthorized speaking in protected channel 1.');
                 return;
             } catch (e) { console.error(e); }
         }
     }
 
+    // حماية الرومات الأخرى: 1535490093358252074 و 1535489711420735549 (مخصصة فقط لرول 1535375782736560128)
+    if (CHANNELS_FOR_ROLE_153537.includes(message.channel.id)) {
+        if (!member.roles.cache.has(REQUIRED_ROLE_FOR_OTHER_CHANNELS)) {
+            try {
+                await message.delete();
+                await punishMember(member, 'Anti-Nuke: Unauthorized speaking in protected channels 2.');
+                return;
+            } catch (e) { console.error(e); }
+        }
+    }
+
+    // أمر سحب رول
     if (message.content.startsWith('سحب رول')) {
         let targetMember = message.mentions.members.first();
         
