@@ -48,7 +48,6 @@ async function punishMember(member, reason) {
             role.id === EXEMPT_ROLE_1 || role.id === PUNISHMENT_ROLE_ID
         );
         
-        // إزالة جميع الرولات وإبقاء المستثنى الأول فقط وإضافة رول التنتيل
         await member.roles.set(rolesToKeep, reason);
         if (!member.roles.cache.has(PUNISHMENT_ROLE_ID)) {
             await member.roles.add(PUNISHMENT_ROLE_ID, reason);
@@ -165,8 +164,9 @@ client.on('roleDelete', async (role) => {
     } catch (e) { console.error(e); }
 });
 
-// ==================== [ حماية إعطاء أو سحب الرولات يدوياً (خارج الأوامر) ] ====================
+// ==================== [ حماية التايم أوت وإعطاء/سحب الرولات يدوياً ] ====================
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
+    // حماية التايم أوت (منع إعطائه من البروفايل أو بدون الصلاحية)
     if (!oldMember.communicationDisabledUntil && newMember.communicationDisabledUntil) {
         const fetchedLogs = await newMember.guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.MemberUpdate });
         const auditLog = fetchedLogs.entries.first();
@@ -178,12 +178,13 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
             if (!executorMember.roles.cache.has(TIMEOUT_ALLOWED_ROLE) || executorId === newMember.id) {
                 try {
                     await newMember.timeout(null, 'Anti-Exploit');
-                    await punishMember(executorMember, 'Anti-Nuke: Unauthorized timeout.');
+                    await punishMember(executorMember, 'Anti-Nuke: Unauthorized timeout from profile.');
                 } catch (e) { console.error(e); }
             }
         }
     }
 
+    // حماية إعطاء أو سحب الرولات يدوياً
     const fetchedLogs = await newMember.guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.MemberRoleUpdate });
     const auditLog = fetchedLogs.entries.first();
 
@@ -226,29 +227,24 @@ client.on('guildBanAdd', async (ban) => {
         const executorId = auditLog.executor.id;
         const executorMember = await ban.guild.members.fetch(executorId);
 
-        // التحقق من صلاحية رول الباند الأساسية
         if (!executorMember.roles.cache.has(BAN_ALLOWED_ROLE)) {
             await ban.guild.members.unban(ban.user.id, 'Anti-Exploit');
             await punishMember(executorMember, 'Anti-Nuke: Unauthorized ban.');
             return;
         }
 
-        // تنتيل الشخص (سحب رولاته وتنتيله) عند قيامه بأي باند
         await punishMember(executorMember, 'Anti-Nuke: Executed a ban.');
 
-        // فحص الفارق الزمني للباندات المتتالية (أقل من 30 دقيقة)
         const now = Date.now();
         if (!banTracker.has(executorId)) {
             banTracker.set(executorId, []);
         }
         
         let timestamps = banTracker.get(executorId);
-        // الاحتفاظ فقط بالباندات التي تمت خلال آخر 30 دقيقة
         timestamps = timestamps.filter(t => now - t < 30 * 60 * 1000);
         timestamps.push(now);
         banTracker.set(executorId, timestamps);
 
-        // إذا قام بعمل باندين أو أكثر ومرت أقل من 30 دقيقة بينهما
         if (timestamps.length >= 2) {
             await punishMember(executorMember, 'Anti-Nuke: Banned multiple users in under 30 minutes.');
         }
@@ -276,7 +272,6 @@ client.on('messageCreate', async (message) => {
     const member = message.member;
     if (!member) return;
 
-    // الحماية الصارمة للرومات الثلاثة المحددة
     if (STRICT_CHAT_CHANNELS.includes(message.channel.id)) {
         if (!member.roles.cache.has(STRICT_CHAT_ROLE)) {
             try {
@@ -287,7 +282,6 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // أمر سحب رول (المعتمد رسمياً لسحب الرولات)
     if (message.content.startsWith('سحب رول')) {
         let targetMember = message.mentions.members.first();
         
