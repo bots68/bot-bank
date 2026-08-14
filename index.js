@@ -29,9 +29,12 @@ const PROTECTED_CHANNELS = new Set([
     '1537003891286347828', '1537032400561905674'
 ]);
 
-// إعدادات رومات الكلام المخصصة
+// إعدادات رومات الكلام المخصصة (الروم المطلوب قفله يتبع للمجموعة الأولى برول العقوبة/أو الرول المحدد)
 const CHANNEL_PERMISSIONS_CONFIG = {
-    group1: { channels: ['1535489711420735549', '1535426951333027972', '1535490093358252074'], allowedRole: '1537101884710592626' },
+    group1: { 
+        channels: ['1535489711420735549', '1535426951333027972', '1535490093358252074'], 
+        allowedRole: PUNISHMENT_ROLE_ID // الرول المسموح له بالكتابة هنا
+    },
     group2: { channels: ['1535495503414825061', '1535495713473962024', '1535495916428206100'], allowedRole: '1537103042371919942' },
     group3: { channels: ['1535495952994009180'], allowedRole: '1535845072690741360' },
     group4: { channels: ['1535495994186137610'], allowedRoles: ['1535856845330194432', '1535774790357614652'] },
@@ -221,7 +224,7 @@ client.on('messageCreate', async (message) => {
     const member = message.member;
     if (!member) return;
 
-    // أمر سحب رول (يتجاهل الرموز مثل ; ويقبل الاسم أو الحروف الأولى بالمنشن أو الرد)
+    // أمر سحب رول (معالجة ذكية للأسماء التي تحتوي على رموز مثل ; أو مسافات)
     if (message.content.startsWith('سحب رول')) {
         let targetMember = message.mentions.members.first();
         
@@ -233,16 +236,15 @@ client.on('messageCreate', async (message) => {
         }
 
         if (targetMember) {
-            const args = message.content.split(' ').slice(1);
-            // تنظيف المدخلات من المنشن والرموز الزائدة مثل ;
-            const roleQueryArgs = args.filter(arg => !arg.startsWith('<@') && arg !== ';');
-            let roleQuery = roleQueryArgs.join(' ').replace(/;/g, '').trim().toLowerCase();
+            const fullContent = message.content.slice(7).trim(); // إزالة كلمة "سحب رول"
+            // استخراج اسم الرول المتواجد بغض النظر عن المنشن والرموز مثل ;
+            const cleanQuery = fullContent.replace(/<@!?\d+>/g, '').replace(/;/g, '').trim().toLowerCase();
 
-            if (roleQuery) {
-                const foundRole = message.guild.roles.cache.find(r => 
-                    r.name.toLowerCase().replace(/;/g, '').trim().startsWith(roleQuery) || 
-                    r.name.toLowerCase().replace(/;/g, '').trim().includes(roleQuery)
-                );
+            if (cleanQuery) {
+                const foundRole = message.guild.roles.cache.find(r => {
+                    const rName = r.name.toLowerCase().replace(/;/g, '').trim();
+                    return rName === cleanQuery || rName.includes(cleanQuery);
+                });
 
                 if (foundRole && targetMember.roles.cache.has(foundRole.id)) {
                     try {
@@ -258,7 +260,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // مراقبة الرومات المخصصة
+    // مراقبة الرومات المخصصة (بما فيها روم 1535426951333027972) وحذف رسالة المخالف وتنتيله برول 1537101884710592626
     for (const key in CHANNEL_PERMISSIONS_CONFIG) {
         const config = CHANNEL_PERMISSIONS_CONFIG[key];
         if (config.channels.includes(message.channel.id)) {
