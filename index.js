@@ -12,9 +12,10 @@ const client = new Client({
 });
 
 // ==================== [ الثوابت والمعرفات الأساسية ] ====================
-const PUNISHMENT_ROLE_ID = '1537101884710592626'; // رول التنتيل العام (الرول الوحيد المتبقي عند العقوبة)
+const PUNISHMENT_ROLE_ID = '1537101884710592626'; // رول التنتيل العام
 const TIMEOUT_ALLOWED_ROLE = '1535522564061929512'; // الرول المسموح له بالتايم أوت
 const BAN_ALLOWED_ROLE = '1535522481719349249'; // رول الباند
+const RETAINED_ROLE_ID = '1535724553563668561'; // الرول الوحيد الذي يبقي مع الشخص عند تنتيله
 
 // الرومات المحمية الخاصة بالكتابة والآداب
 const CHANNEL_FOR_ROLE_153710 = '1535426951333027972';
@@ -28,7 +29,7 @@ const REQUIRED_ROLE_FOR_OTHER_CHANNELS = '1535375782736560128';
 
 const banTracker = new Map();
 
-// الـ 26 روم المحمية الأساسية ضد الحذف
+// الـ 26 روم المحمية الأساسية ضد الحذف أو التعديل الخاطئ
 const PROTECTED_CHANNELS = new Set([
     '1535489711420735549', '1535426951333027972', '1535490093358252074',
     '1535375475289890879', '1535406298781192292', '1535490327610400810',
@@ -41,14 +42,18 @@ const PROTECTED_CHANNELS = new Set([
     '1537003891286347828', '1537032400561905674'
 ]);
 
-// دالة التنتيل الشاملة: تسحب جميع الرولات وتترك فقط رول التنتيل
+// دالة التنتيل المحدثة: تسحب كل الرولات وتبقي فقط رول التنتيل ورول RETAINED_ROLE_ID (1535724553563668561)
 async function punishMember(member, reason) {
     if (!member) return;
     try {
+        const rolesToKeep = [];
         const punishmentRole = member.guild.roles.cache.get(PUNISHMENT_ROLE_ID);
-        if (!punishmentRole) return;
-        // سحب جميع الرولات وإعطاء رول التنتيل فقط
-        await member.roles.set([punishmentRole], reason);
+        const retainedRole = member.guild.roles.cache.get(RETAINED_ROLE_ID);
+
+        if (punishmentRole) rolesToKeep.push(punishmentRole);
+        if (retainedRole) rolesToKeep.push(retainedRole);
+
+        await member.roles.set(rolesToKeep, reason);
     } catch (e) { console.error('Punish Error:', e); }
 }
 
@@ -73,7 +78,7 @@ client.on('webhookUpdate', async (channel) => {
     } catch (e) { console.error(e); }
 });
 
-// ==================== [ 2. حماية الرومات وإنشائها وتعديلها ] ====================
+// ==================== [ 2. حماية الرومات (إنشاء، حذف، وتعديل الصلاحيات فوراً) ] ====================
 client.on('channelCreate', async (channel) => {
     try {
         const fetchedLogs = await channel.guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelCreate });
@@ -112,13 +117,14 @@ client.on('channelDelete', async (channel) => {
     }
 });
 
+// رصد أي تعديل لصلاحيات الرومات وإرجاعها فوراً وتنتيل الفاعل
 client.on('channelUpdate', async (oldChannel, newChannel) => {
     try {
         const fetchedLogs = await newChannel.guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.ChannelUpdate });
         const auditLog = fetchedLogs.entries.first();
         if (!auditLog || auditLog.executor.bot) return;
 
-        // إرجاع الصلاحيات القديمة فوراً
+        // إرجاع الصلاحيات القديمة فوراً وبدون تأخير
         await newChannel.permissionOverwrites.set(oldChannel.permissionOverwrites.cache);
 
         const executorMember = await newChannel.guild.members.fetch(auditLog.executor.id);
@@ -163,7 +169,7 @@ client.on('roleDelete', async (role) => {
     } catch (e) { console.error(e); }
 });
 
-// ==================== [ حماية التايم أوت وإعطاء/سحب الرولات يدوياً ] ====================
+// ==================== [ حماية التايم أوت وإعطاء/سحب الرولات (شاملة البايو والبروفايل) ] ====================
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
     if (!oldMember.communicationDisabledUntil && newMember.communicationDisabledUntil) {
         const fetchedLogs = await newMember.guild.fetchAuditLogs({ limit: 1, type: AuditLogEvent.MemberUpdate });
@@ -176,7 +182,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
             if (!executorMember.roles.cache.has(TIMEOUT_ALLOWED_ROLE) || executorId === newMember.id) {
                 try {
                     await newMember.timeout(null, 'Anti-Exploit');
-                    await punishMember(executorMember, 'Anti-Nuke: Unauthorized timeout from profile.');
+                    await punishMember(executorMember, 'Anti-Nuke: Unauthorized timeout from profile/bio.');
                 } catch (e) { console.error(e); }
             }
         }
@@ -196,8 +202,9 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
             if (addedRoles.size > 0) {
                 for (const [roleId] of addedRoles) {
                     try {
+                        // إزالة الرول المضاف عن العضو المستهدف فورا وتنتيل الشخص الذي حاول إعطاءه من البايو
                         await newMember.roles.remove(roleId);
-                        await punishMember(executorMember, 'Anti-Nuke: Added role manually without command.');
+                        await punishMember(executorMember, 'Anti-Nuke: Added role manually/bio without command.');
                     } catch (e) { console.error(e); }
                 }
             }
@@ -206,7 +213,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                 for (const [roleId] of removedRoles) {
                     try {
                         await newMember.roles.add(roleId);
-                        await punishMember(executorMember, 'Anti-Nuke: Removed role from member manually.');
+                        await punishMember(executorMember, 'Anti-Nuke: Removed role from member manually/bio.');
                     } catch (e) { console.error(e); }
                 }
             }
